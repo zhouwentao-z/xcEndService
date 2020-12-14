@@ -1,0 +1,6 @@
+# Project exclude paths
+/test-freemarker/target/
+/test-rabbitmq-consumer/target/
+/test-rabbitMQ-producer/target/
+/xc-framework-model/target/
+/xc-service-api/target/
