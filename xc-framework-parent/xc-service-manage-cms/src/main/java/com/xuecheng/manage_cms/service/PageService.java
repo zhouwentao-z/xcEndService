@@ -5,10 +5,13 @@ import com.mongodb.client.gridfs.GridFSBucket;
 import com.mongodb.client.gridfs.GridFSDownloadStream;
 import com.mongodb.client.gridfs.model.GridFSFile;
 import com.xuecheng.framework.domain.cms.CmsPage;
+import com.xuecheng.framework.domain.cms.CmsSite;
 import com.xuecheng.framework.domain.cms.CmsTemplate;
 import com.xuecheng.framework.domain.cms.request.QueryPageRequest;
 import com.xuecheng.framework.domain.cms.response.CmsCode;
 import com.xuecheng.framework.domain.cms.response.CmsPageResult;
+import com.xuecheng.framework.domain.cms.response.CmsPostPageResult;
+import com.xuecheng.framework.domain.course.CourseBase;
 import com.xuecheng.framework.exception.ExceptionCast;
 import com.xuecheng.framework.model.response.CommonCode;
 import com.xuecheng.framework.model.response.QueryResponseResult;
@@ -17,6 +20,7 @@ import com.xuecheng.framework.model.response.ResponseResult;
 import com.xuecheng.manage_cms.config.RabbitmqConfig;
 import com.xuecheng.manage_cms.dao.CmsConfigRepository;
 import com.xuecheng.manage_cms.dao.CmsPageRepository;
+import com.xuecheng.manage_cms.dao.CmsSiteRepository;
 import com.xuecheng.manage_cms.dao.CmsTemplateRepository;
 import freemarker.cache.StringTemplateLoader;
 import freemarker.template.Configuration;
@@ -35,7 +39,6 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.ui.freemarker.FreeMarkerTemplateUtils;
 import org.springframework.web.client.RestTemplate;
-
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -60,6 +63,8 @@ public class PageService {
     GridFSBucket gridFSBucket;
     @Autowired
     RabbitTemplate rabbitTemplate;
+    @Autowired
+    CmsSiteRepository cmsSiteRepository;
 
     /**
      * 自定义条件查询
@@ -156,6 +161,14 @@ public class PageService {
        }
        return  null;
     }
+//    private  CmsPage getSiteId(String id){
+//        Optional<CmsPage> siteId = cmsPageRepository.findById(id);
+//        if (siteId.isPresent()) {
+//            CmsPage cmsPage = siteId.get();
+//            return cmsPage;
+//        }
+//        return null;
+//    }
 
     /**
      * 修改页面
@@ -164,12 +177,10 @@ public class PageService {
      * @return
      */
     public  CmsPageResult update(String id,CmsPage cmsPage){
-       CmsPage one =this.getById(id);
-        if(one!= null){
+       CmsPage one = this.getById(id);
+        if(one != null){
             //准备更新数据
             //设置要修改的数据
-            //更新模板id
-            one.setTemplateId(cmsPage.getTemplateId());
             //更新所属站点
             one.setSiteId(cmsPage.getSiteId());
             //更新页面别名
@@ -182,6 +193,8 @@ public class PageService {
             one.setDataUrl(cmsPage.getDataUrl());
             //更新物理路径
             one.setPagePhysicalPath(cmsPage.getPagePhysicalPath());
+            //更新模板id
+            one.setTemplateId(cmsPage.getTemplateId());
             //提交修改
             cmsPageRepository.save(one);
             return  new CmsPageResult(CommonCode.SUCCESS,one);
@@ -243,34 +256,41 @@ public class PageService {
      * @return
      */
     private String getTemplateByPageId(String pageId){
-        //查询页面信息
+        //取出页面的信息
         CmsPage cmsPage = this.getById(pageId);
-        if (cmsPage == null){
+        if(cmsPage == null){
             //页面不存在
             ExceptionCast.cast(CmsCode.CMS_PAGE_NOTEXISTS);
         }
-        //页面模板
+        //获取页面的模板id
         String templateId = cmsPage.getTemplateId();
-        if (StringUtils.isEmpty(templateId)){
+        if(StringUtils.isEmpty(templateId)){
             ExceptionCast.cast(CmsCode.CMS_GENERATEHTML_TEMPLATEISNULL);
         }
+        //查询模板信息
         Optional<CmsTemplate> optional = cmsTemplateRepository.findById(templateId);
-        if (optional.isPresent()){
+        if(optional.isPresent()){
             CmsTemplate cmsTemplate = optional.get();
-            //模板文件id
+            //获取模板文件id
             String templateFileId = cmsTemplate.getTemplateFileId();
-            //取出模板文件内容
+            //从GridFS中取模板文件内容
+            //根据文件id查询文件
             GridFSFile gridFSFile = gridFsTemplate.findOne(Query.query(Criteria.where("_id").is(templateFileId)));
+
+            //打开一个下载流对象
             GridFSDownloadStream gridFSDownloadStream = gridFSBucket.openDownloadStream(gridFSFile.getObjectId());
-            //创建GridFsResource
+            //创建GridFsResource对象，获取流
             GridFsResource gridFsResource = new GridFsResource(gridFSFile,gridFSDownloadStream);
-            try{
+            //从流中取数据
+            try {
                 String content = IOUtils.toString(gridFsResource.getInputStream(), "utf-8");
+                return content;
             } catch (IOException e) {
                 e.printStackTrace();
             }
         }
-        return  null;
+
+        return null;
     }
 
     /**
@@ -345,5 +365,52 @@ public class PageService {
         cmsPage.setHtmlFileId(objectId.toHexString());
         cmsPageRepository.save(cmsPage);
         return cmsPage;
+    }
+
+    public CmsPageResult save(CmsPage cmsPage){
+        //校验页面是否存在，根据页面名称，站点id，页面webpath查询
+        CmsPage one = cmsPageRepository.findByPageNameAndSiteIdAndPageWebPath(cmsPage.getPageName(),cmsPage.getSiteId(),cmsPage.getPageWebPath());
+        if (one!= null){
+            //更新
+            return  this.update(one.getPageId(),cmsPage);
+        }else {
+            //创建
+            return  this.add(cmsPage);
+        }
+    }
+
+    /**
+     * 一键发布页面
+     * @param cmsPage
+     * @return
+     */
+    public CmsPostPageResult postPageQuick(CmsPage cmsPage){
+        //将页面信息存储到cms_page集合中
+        CmsPageResult save = this.save(cmsPage);
+        if (!save.isSuccess()){
+            ExceptionCast.cast(CommonCode.FAIL);
+        }
+        //得到页面的Id
+        CmsPage cmsPageSave = save.getCmsPage();
+        String pageId = cmsPageSave.getPageId();
+        //执行页面发布（先静态化，保存GridFs,向MQ发消息）
+        ResponseResult post = this.post(pageId);
+        if (!post.isSuccess()){
+            ExceptionCast.cast(CommonCode.FAIL);
+        }
+       // return 拼接页面Url= cmsSite.siteDomain+cmsSite.siteWebPath+ cmsPage.pageWebPath + cmsPage.pageName
+        //取出站点
+        String siteId = cmsPageSave.getSiteId();
+        CmsSite cmsSite = this.findCmsSiteById(siteId);
+        String pageUrl = cmsSite.getSiteDomain()+cmsSite.getSiteWebPath()+cmsPage.getPageWebPath()+cmsPage.getPageName();
+        return new CmsPostPageResult(CommonCode.SUCCESS,pageUrl);
+    }
+    //根据id查询站点信息
+    public CmsSite findCmsSiteById(String id){
+        Optional<CmsSite> byId = cmsSiteRepository.findById(id);
+        if (byId.isPresent()){
+            return  byId.get();
+        }
+        return null;
     }
 }
