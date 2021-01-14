@@ -77,13 +77,15 @@ public class CourseService {
     private String previewUrl;
 
     /**
-     * 查询课程列表
+     * 查询我的课程
      */
-    public QueryResponseResult findCourseList(int page, int size, CourseListRequest courseListRequest){
+    public QueryResponseResult<CourseInfo> findCourseList(String company_id,int page, int size, CourseListRequest courseListRequest){
 
         if (courseListRequest == null){
              courseListRequest = new CourseListRequest();
         }
+        //将公司Id参数传入dao
+        courseListRequest.setCompanyId(company_id);
         if(page<=0){
             page=0;
         }
@@ -102,7 +104,7 @@ public class CourseService {
         QueryResult<CourseInfo> courseInfoQueryResult = new QueryResult<>();
         courseInfoQueryResult.setList(list);
         courseInfoQueryResult.setTotal(total);
-        return  new QueryResponseResult(CommonCode.SUCCESS,courseInfoQueryResult);
+        return  new QueryResponseResult<CourseInfo>(CommonCode.SUCCESS,courseInfoQueryResult);
     }
 
 

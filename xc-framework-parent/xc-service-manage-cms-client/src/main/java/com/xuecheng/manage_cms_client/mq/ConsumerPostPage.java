@@ -37,6 +37,5 @@ public class ConsumerPostPage {
        }
        //将页面保存到服务器物理路径
         pageService.savePageToServerPath(pageId);
-
     }
 }
